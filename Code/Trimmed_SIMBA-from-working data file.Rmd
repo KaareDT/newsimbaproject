@@ -1,0 +1,492 @@
+---
+title: "The SiMBA study - Complete Analysis"
+author: "Kaare D. Tranæs"
+date: "5/08/2022"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+# The SiMBA study
+
+### RCT study with 2 groups; FCS (active treatment) and Placebo. Measurements are from baseline and end of trial. All participants completede (no drop outs).
+
+<!-- #ToDO list: -->
+
+<!-- #Find out how to convert NA's to group means for line ( ) -->
+
+<!-- #Change how variables are renamed. Use rename_vars() (or similar) and write variable names directly. -->
+
+<!-- #Find out how to reference code inline -->
+
+<!-- # -->
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+#knitr::opts_knit$set(root.dir = "../")
+```
+
+```{r load packages, include=FALSE}
+library(readxl)
+library(tidyverse)
+library(visdat)
+library(ruler)
+library(knitr)
+library(outliers)
+library(tableone)
+library(broom)
+library(gt)
+library(writexl)
+library(patchwork)
+```
+
+## Biochemical analysis of clinical variables
+
+#### Data import and cleaning
+
+The data set 'simba working data 2' is imported and cleaned. \> Missing values in the raw data (empty cells) are stored in the variable MissingData, and are replaced with the mean value of the variable for each group.
+
+The plot below confirmed that no data are missing going moving forward.
+
+```{r load and clean data, echo=FALSE, warning=FALSE}
+
+data  <- read_excel("RawData/simba working data 2.xlsx") %>% # Load data
+  pivot_longer(                                   # Pivot to long format
+               cols = weight_baseline:asat_end,
+               names_to = "Variables",
+               values_to = "Values") %>% 
+  mutate(                                      # Change visit names
+    Visit = ifelse(str_detect(Variables,'baseline'),'Baseline', 
+            ifelse(str_detect(Variables,'end'),'End','miss')),
+    Variables = Variables %>% str_remove('_baseline') %>% str_remove('_end') %>% 
+           trimws() %>% tolower()) %>% 
+  rename(                                      # Rename 
+    CompletionStatus = status_end) %>% 
+  mutate(
+    Treatment = ifelse(str_detect(Treatment,'A'),'FCS',
+                       ifelse(str_detect(Treatment,'B'),'Placebo','miss')),
+         Treatment = as.factor(Treatment)) %>% 
+  select(
+    -status_baseline) %>% 
+  relocate(
+    Birthday, Age,Sex, CompletionStatus, Treatment, Visit, Variables,Values, .after=`Participant_ID`) %>% 
+  group_by(                                     # Replace missing values with group mean
+    Variables) %>% 
+  mutate(
+    Values = replace_na(Values, mean(Values, na.rm = TRUE))
+  ) 
+
+data %>%      # Check for missing values
+  vis_miss()
+
+```
+
+```{r change variable names, eval=FALSE, include=FALSE}
+data <- data %>% # These lines rename variables
+  mutate(
+    NewVariables = ifelse(str_detect(Variables,'peptidt0'), 'C-peptide 0m (pmol/L)',       
+                  ifelse(str_detect(Variables,'peptidt30'), 'C-peptide 30m (pmol/L)',
+                  ifelse(str_detect(Variables,'peptidt120'), 'C-peptide 120m (pmol/L)',
+                  ifelse(str_detect(Variables,'glucoset0'), 'Glucose 0m (mmol/L)',
+                  ifelse(str_detect(Variables,'glucoset30'), 'Glucose 30m (mmol/L)',
+                  ifelse(str_detect(Variables,'glucoset120'), 'Glucose 120m (mmol/L)',
+                  ifelse(str_detect(Variables, 'insulin_t0'), 'Insulin 0m (pmol/L)',
+                  ifelse(str_detect(Variables, 'insulin_t30'), 'Insulin 30m (pmol/L)',
+                  ifelse(str_detect(Variables, 'insulin_t120'), 'Insulin 120m (pmol/L)',
+                  ifelse(str_detect(`Variables`,'weight'),'Weight (kg)',
+                  ifelse(str_detect(`Variables`,'fatmass'),'Fatmass (kg)',
+                  ifelse(str_detect(`Variables`,'waist'),'Waist (cm)',
+                  ifelse(str_detect(`Variables`,'height'),'Height (cm)',
+                  ifelse(str_detect(`Variables`,'bmi'),'BMI (kg/m2)',
+                  ifelse(str_detect(`Variables`,'trig'),'Triglycerides (mmol/l)',
+                  ifelse(str_detect(`Variables`,'ldl'),'LDL-Cholesterol (mmol/l)',
+                  ifelse(str_detect(`Variables`,'hdl'),'HDL-Cholesterol (mmol/l)',
+                  ifelse(str_detect(`Variables`,'chol'),'Total Cholesterol (mmol/l)',
+                  ifelse(str_detect(`Variables`,'hba1c_h'),'HbA1c Hemoglobin',
+                  ifelse(str_detect(`Variables`,'hba1c_h'),'HbA1c Hemoglobin',
+                  ifelse(str_detect(`Variables`,'hba1c_hemolysat'),'HbA1c (DCCT%)',
+                  ifelse(str_detect(`Variables`,'crp'),'C-reactive Protein (mg/L)',
+                  ifelse(str_detect(`Variables`,'alat'),'ALAT (U/L)',
+                  ifelse(str_detect(`Variables`,'asat'),'ASAT (U/L)',
+                  ifelse(str_detect(`Variables`,'auc'),'Glucose AUC',
+                  Variables)))))))))))))))))))))))))) %>%
+   mutate(NewVariables = factor(NewVariables, levels = c("Weight (kg)","Height (cm)","BMI (kg/m2)","Waist (cm)","Fatmass (kg)", "C-reactive Protein (mg/L)", "Triglycerides (mmol/l)", "LDL-Cholesterol (mmol/l)", "HDL-Cholesterol (mmol/l)", "Total Cholesterol (mmol/l)", "Glucose 0m (mmol/L)", "Glucose 30m (mmol/L)", "Glucose 120m (mmol/L)", "HbA1c (DCCT%)", "Insulin 0m (pmol/L)", "Insulin 30m (pmol/L)", "Insulin 120m (pmol/L)", "C-peptide 0m (pmol/L)", "C-peptide 30m (pmol/L)", "C-peptide 120m (pmol/L)", "ALAT (U/L)", "ASAT (U/L)", "Glucose AUC"))) %>%
+  arrange(NewVariables)
+
+```
+
+### Outlier inspection
+
+The code below calculates a z-score for all observations and determines values with z-scores \>4 as outliers. All varialbes are then plotted as histograms for visual inspection.
+
+Although there are some statistical outliers, they are not biologically implausible and are thus kept in the data analysis.
+
+```{r Check for outliers, echo=FALSE}
+
+outliers <- function(x, thres = 4, na.rm = TRUE) {
+  s <- sd(x, na.rm = na.rm) 
+  mn <- mean(x, na.rm = na.rm)
+  o <- rep(FALSE,length(x))
+  o[x < (mn - thres*s)] <- TRUE
+  o[x > (mn + thres*s)] <- TRUE
+  o[is.na(x)] <- TRUE
+  return(o)
+}
+
+data %>% 
+  group_by(Variables) %>% 
+  mutate(e = lm(Values~ Visit*Treatment + Sex) %>% residuals(),
+         Outlier = outliers(e))%>% 
+  ggplot(aes(Values, fill = Outlier)) + 
+  geom_histogram()  + 
+  facet_wrap(~Variables,scales =  'free')
+
+#data <- data %>% 
+#   filter(Outlier == FALSE)
+```
+
+### Table One
+
+The following table shows the two intervention groups at baseline. Purpose is to show that randomization worked, and hence that the two groups are not different.
+
+```{r Table One, echo=FALSE}
+
+#baseline <-            ####### Write baseline stats to csv if needed by uncommenting this line ###### 
+data %>% 
+  filter(Visit == "Baseline") %>% 
+    pivot_wider(names_from = "Variables", values_from = "Values") %>% 
+ CreateTableOne(., strata = "Treatment", vars = c('Age','Sex', 'weight', 'height','fatmass','waist','trig','hdl','ldl','chol','glucoset0','glucoset30','glucoset120','auc','crp')) %>% 
+print(., nonnormal = 'Age', cramVars = 'Sex')
+ # %>% baseline_csv <- print(baseline, nonnormal = 'Age', cramVars = 'Sex') ####### Write baseline stats to csv if needed by uncommenting this line ###### 
+# write.csv(baseline_csv, file = "../RawData/SimbaBaseline.csv")
+```
+
+The table above illustrates that the groups were evenly matched at baseline.
+
+Baseline values of interest are illustrated below.
+
+```{r baseline values displayed}
+data %>% 
+  filter(Visit == 'Baseline') %>% 
+  filter(Variables %in% c('weight','glucoset0','glucoset30','glucoset120','crp', 'fatmass')) %>% 
+  ggplot(data = ., aes(x = Treatment,
+                       y = Values,
+                       color = Treatment,
+                       #group = factor(Participant_ID)
+                       )) + 
+  geom_jitter() + theme(legend.position = NULL) + facet_wrap(~Variables, scales = 'free')
+```
+
+### Results tabel
+
+Below is the results of a linear regression model calculating the effect of the intervention on changes from baseline to end of trial. Results are displayed as Placebo VS Treatment (so a negative value means an increase in the treatment group).
+
+```{r linear model, echo=FALSE}
+# data %>%                                                         Create excel-table with summary statistics
+#   select(-Birthday,-CompletionStatus) %>% 
+#   group_by(Treatment, Visit, Variables) %>% 
+#   summarise(mean = mean(Values), 
+#             sd = sd(Values)) %>% 
+#   write_xlsx(, path = "Simba summary statistics all sexes w. p-value.xlsx")
+
+data %>% 
+  select(-CompletionStatus) %>% 
+  group_by(Participant_ID, Treatment, Sex, Variables) %>% 
+  summarise(Change = Values[Visit== "End"]- Values[Visit== "Baseline"]) %>% 
+  mutate(All = "All") %>% 
+  gather(sx,Sex,All,Sex) %>% 
+  group_by(Variables,Sex) %>% 
+  do(lm(data = ., Change ~ Treatment) %>%
+       tidy) %>% 
+  filter(term!='(Intercept)') %>% 
+  select(-statistic, -term) %>% 
+  kable(., caption = 'Placebo versus Treatment. Effect of intervention reported for both genders and seperately)', digits = 4)
+```
+
+### Primary study outcomes visualized
+
+> Blood glucose levels for each treatment group during 2-hour OGTT
+
+```{r primary outcome plot}
+visit.labs <- c("Pre-trial", "Post-trial") # Names you want on plot
+names(visit.labs) <- c("Baseline", "End") # Current names of visits in data
+
+################## Boxplot showing 0, 30 and 120 min glucsoe levels. Groups side-by-side. Faceted by visit. ###########
+all <- data %>% 
+  filter(Variables == "glucoset0" | Variables == "glucoset30"| Variables == "glucoset120") %>% 
+  ggplot(., aes(x = factor(Variables, level= c("glucoset0", "glucoset30", "glucoset120")),   # Change order of variables
+                y = Values,
+                color = Treatment)) + 
+  geom_boxplot() + facet_wrap(~Visit,
+               labeller = labeller(Visit = visit.labs),
+             ncol = 2) +
+  scale_x_discrete(labels=c("glucoset0" = "0 min",
+                             "glucoset30" = "30 min",
+                             "glucoset120"= "120 min"
+                             ))+
+   ylab("Glucose, mmol/L")+ 
+   xlab("OGTT time points") +
+  ggtitle("Oral Glucose Tolerance Test") 
+
+################## Line plot showing time course of glucose during OGTT. Pre and Post in same plot. Faceted by Group. ###########
+
+OGTT <- data %>% 
+  filter(Variables == "glucoset0" | Variables == "glucoset30"| Variables == "glucoset120") %>% 
+  group_by(Treatment, Visit, Variables) %>%  # Calculating mean for both groups 
+  summarise(MeanValues = mean(Values)) %>%   # Calculating mean for both groups
+  ggplot(., aes(x = factor(Variables, level= c("glucoset0", "glucoset30", "glucoset120")),  # Change order of variables
+                y = MeanValues,
+                group = Visit,
+                color = Visit)) + 
+  geom_point() + geom_line() + theme(legend.position = NULL) + facet_wrap(~Treatment,
+             ncol = 2) +
+  scale_color_discrete(labels=c('Pre-trial', 'Post-trial')) +
+  scale_x_discrete(labels=c("glucoset0" = "0 min",
+                             "glucoset30" = "30 min",
+                             "glucoset120"= "120 min"
+                             ))+
+   ylab("Glucose, mmol/L")+ 
+   xlab("OGTT time points")
+
+################## Boxplot showing AUC at Pre and Post. Faceted by Group. ###########
+
+AUC <- data %>% 
+  filter(Variables == "auc") %>% 
+  ggplot(., aes(x = Visit, 
+                y = Values,
+                #grouping = Variables,
+                fill = Treatment)) + 
+  geom_boxplot() + facet_wrap(~Treatment,
+             ncol = 2) +
+  scale_x_discrete(labels=c("Baseline" = "Pre-trial", "End" = "Post-trail"))+
+   ylab("Glucose, mmol/L")+ 
+   xlab("Visits")
+
+##### Patchwork ###### 
+
+patchwork <- OGTT / AUC
+PatchOut <- patchwork + plot_annotation(
+  title = "Blood Glucose Concentration Levels at Pre-trial and Post-trial",
+  tag_levels = 'A' 
+)
+#ggsave('OGTT results.pdf', PatchOut, limitsize = FALSE, height = 10, width = 13)
+```
+
+
+```{r changes displayed, eval=FALSE, include=FALSE}
+data %>% 
+  #filter(time %in% c('baseline','end')) %>% 
+  filter(Variables %in% c('age','weight','glucoset0','glucoset30','glucoset120','crp', 'fatmass')) %>% 
+  ggplot(data = ., aes(x = Visit,
+                       y = Values,
+                       color = Treatment,
+                       group = factor(Participant_ID)
+                       )) + 
+  geom_point() + geom_line() + theme(legend.position = NULL) + facet_wrap(~Variables, scales = 'free')
+```
+
+## Metabolomics of Plasma Fatty Acids and Amino Acids
+
+### Import Fatty Acid Raw Data
+
+```{r load fame data}
+fame <- read_excel("RawData/FAME_working_copy.xlsx", skip = 2) %>% 
+  mutate(Visit = ifelse(str_detect(`Sample ID`,'_1'),'Baseline',
+                       ifelse(str_detect(`Sample ID`,'_2'),'End','miss'))) %>% mutate('Sample ID' = `Sample ID` %>% str_remove('_1') %>% str_remove('_2'))
+  
+```
+
+#### Load SIMBA ID coupling list
+
+```{r load coupling list}
+
+treatment_list <- read_excel("RawData/SIMBA_ID_KOBLING.xlsx",
+                      col_types = c("numeric", "text", "text"))
+
+participant_info <- read_excel("RawData/Participant_info.xlsx",
+                      col_types = c("text", "numeric", "text", "text", "text"))
+
+id <- inner_join(treatment_list, participant_info, by = "allocation_no") %>% select(-Id, -Lastname)
+
+```
+
+### Join datasets
+
+```{r assign intervention}
+#Join fame-data with participant allocation list                                        #Problem with allocation_no. No ideas. FIxed! 
+fame <- fame %>% 
+  dplyr::inner_join(., id, by = c('Sample ID' = 'allocation_no')) %>% 
+  mutate(treatment = ifelse(str_detect(treatment,'A'),'FCS',
+                       ifelse(str_detect(treatment,'B'),'Placebo','miss'))) %>% 
+  relocate(Visit, .after=`Sample ID`) %>% 
+  relocate(treatment, .after=`Sample ID`)%>% 
+  relocate(Age:Sex, .after=`Sample ID`) %>% 
+  select(-Randomiseringsid)
+head(fame)
+```
+
+#### Wrap to long format
+
+```{r, wrap to long format}
+fame_long <- fame_join %>% 
+  pivot_longer("C10:0":"C24:1", 
+               names_to = "Fatty_Acids", 
+               values_to = "µmol/L")
+head(fame_long)
+```
+
+<!-- ## Corona sub-analysis -->
+
+<!-- ```{r eval=FALSE, include=FALSE} -->
+
+<!-- #corona <- read_excel("files to bind/Corona-affected participants.xlsx") -->
+
+<!-- #corona_participants <- corona %>%  -->
+
+<!--  # left_join(biomarkers, by = c("Corona_participants" = "Participant")) -->
+
+<!-- ``` -->
+
+<!-- # Effect of treatment of corona affected subjects - linear regression -->
+
+<!-- ```{r} -->
+
+<!-- # tb_corona <- corona_participants %>%  -->
+
+<!-- #   #filter(Participant == corona$Corona_participants) %>%  -->
+
+<!-- #   group_by(Variables, Corona_participants, Treatment,Sex) %>%  -->
+
+<!-- #   summarise(Change = Values[Visit=='End'] - Values[Visit=='Baseline']) %>%  -->
+
+<!-- #   mutate(All = 'All') %>%  -->
+
+<!-- #   pivot_longer(cols = c(All, Sex), names_to = "sex", values_to = "Sex") %>%  -->
+
+<!-- #   group_by(Variables,Sex) %>%  -->
+
+<!-- #   do(lm(data = ., Change ~ Treatment) %>% tidy)  %>% filter(term!='(Intercept)') -->
+
+<!-- #       #### effect estimate for lm(change) = -1 x effect estimate -->
+
+<!-- #  -->
+
+<!-- # tb_corona %>% select(-term, -statistic) %>%  -->
+
+<!-- #   kable(., caption = 'change from baseline results treatmentB versus treatmeentA (reported for all and both genders seperately)', digits = 4) -->
+
+<!-- #  -->
+
+<!-- # tb_corona %>% rio::export(.,file = "_corona_affected_results_change_both_sexes.xlsx") -->
+
+<!-- ``` -->
+
+<!-- # Effect of treatment - linear regression -->
+
+<!-- ```{r} -->
+
+<!-- # tb <- biomarkers %>%  -->
+
+<!-- #   #filter(Participant == corona$Corona_participants) %>%  -->
+
+<!-- #   group_by(Variables, Participant,Treatment,Sex) %>%  -->
+
+<!-- #   summarise(Change = Values[Visit=='End'] - Values[Visit=='Baseline']) %>%  -->
+
+<!-- #   mutate(All = 'All') %>%  -->
+
+<!-- #   pivot_longer(cols = c(All, Sex), names_to = "sex", values_to = "Sex") %>%  -->
+
+<!-- #   group_by(Variables,Sex) %>%  -->
+
+<!-- #   do(lm(data = ., Change ~ Treatment) %>% tidy)  %>% filter(term!='(Intercept)') -->
+
+<!-- #       #### effect estimate for lm(change) = -1 x effect estimate -->
+
+<!-- #  -->
+
+<!-- # tb %>% select(-term, -statistic) %>%  -->
+
+<!-- #   kable(., caption = 'change from baseline results treatmentB versus treatmeentA (reported for all and both genders seperately)', digits = 4) -->
+
+<!-- #  -->
+
+<!-- # #tb %>% rio::export(.,file = "results_change_both_sexes.xlsx") -->
+
+<!-- ``` -->
+
+<!-- #### Plot results -->
+
+<!-- ```{r plot results and inspect for outliers} -->
+
+<!-- # #all_plots <- biomarkers %>%  -->
+
+<!-- #   filter(Visit != "Change") %>%  -->
+
+<!-- #   ggplot(., aes(x = Variables,  -->
+
+<!-- #                 y = Values,  -->
+
+<!-- #                 fill = Treatment)) +  -->
+
+<!-- #   geom_boxplot() + -->
+
+<!-- #   facet_wrap(~Variables + Visit,  -->
+
+<!-- #              scales = "free",  -->
+
+<!-- #              ncol = 2) -->
+
+<!-- # #all_plots -->
+
+<!-- # ggsave('Inspect plots box.pdf', all_plots, limitsize = FALSE, height = 70) #Open file and inspect.  -->
+
+<!-- ``` -->
+
+<!-- #### See significant results -->
+
+<!-- ```{r, calculate significant stats} -->
+
+<!-- # significant_results <- tb %>%  -->
+
+<!-- #   select(-statistic, -term) %>%  -->
+
+<!-- #   filter(p.value <= 0.05) -->
+
+<!-- # significant_results -->
+
+<!-- ``` -->
+
+<!-- ### Plot Significant results -->
+
+<!-- ```{r} -->
+
+<!-- # biomarkers %>%  -->
+
+<!-- #   filter(Variables == significant_results$Variables) %>%  -->
+
+<!-- #   filter(!Visit %in% "Change") %>%  -->
+
+<!-- #   ggplot(., aes(x = Visit,  -->
+
+<!-- #                 y = Values, -->
+
+<!-- #                 grouping = Treatment, -->
+
+<!-- #                 color = Sex)) +  -->
+
+<!-- #   geom_boxplot() +  -->
+
+<!-- #   ggtitle("Fasting Blood Glucose") + -->
+
+<!-- #   xlab("Visit") + -->
+
+<!-- #   ylab("mmol/L") -->
+
+<!-- ``` -->
+
+<!-- ```{r save results, include=FALSE, echo=FALSE} -->
+
+<!-- #ggsave('Significant Plots.pdf', significant_plots, limitsize = FALSE, height = 8) -->
+
+<!-- ``` -->
